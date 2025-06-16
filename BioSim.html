@@ -1,0 +1,299 @@
+<!-- 
+  Biomechanics Analyzer
+  Author: Austin Ryu (6/15/2025)
+  Description: Interactive web app to visualize joint torques and predict max weight lifted 
+  during squat, bench press, and deadlift using adjustable anatomical parameters.
+-->
+  
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Biomechanics Analyzer</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1200px; margin: auto; }
+    .controls, .results { padding: 20px; border: 1px solid #ccc; border-radius: 5px; }
+    .slider-container { margin: 10px 0; }
+    .slider-container label { display: inline-block; width: 150px; }
+    canvas { border: 1px solid #ccc; width: 100%; max-width: 500px; height: 400px; }
+    button { padding: 5px 10px; margin: 5px; }
+    .selected { background-color: #007BFF; color: white; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Biomechanics Analyzer</h1>
+  <div class="container">
+    <div class="controls">
+      <h2>Lift Type</h2>
+      <button onclick="selectLift('squat')" id="squat-btn">Squat</button>
+      <button onclick="selectLift('bench')" id="bench-btn">Bench Press</button>
+      <button onclick="selectLift('deadlift')" id="deadlift-btn">Deadlift</button>
+
+      <h2>Neuron Activation Level</h2>
+      <select id="level" onchange="updateSimulation()">
+        <option value="beginner">Beginner</option>
+        <option value="intermediate" selected>Intermediate</option>
+        <option value="elite">Elite</option>
+      </select>
+
+      <h2>Anatomy Editor</h2>
+
+      <div class="slider-container joint-slider" data-joint="hip">
+        <label>Hip Angle (deg):</label>
+        <input type="range" min="0" max="180" value="0" id="hip-angle" oninput="updateSimulation()">
+        <span id="hip-angle-value">0</span>
+      </div>
+      <div class="slider-container joint-slider" data-joint="hip">
+        <label>Hip Lever Arm (m):</label>
+        <input type="range" min="0.05" max="0.3" step="0.01" value="0.2" id="hip-lever" oninput="updateSimulation()">
+        <span id="hip-lever-value">0.2</span>
+      </div>
+
+      <div class="slider-container joint-slider" data-joint="knee">
+        <label>Knee Angle (deg):</label>
+        <input type="range" min="0" max="180" value="180" id="knee-angle" oninput="updateSimulation()">
+        <span id="knee-angle-value">180</span>
+      </div>
+      <div class="slider-container joint-slider" data-joint="knee">
+        <label>Knee Lever Arm (m):</label>
+        <input type="range" min="0.05" max="0.3" step="0.01" value="0.15" id="knee-lever" oninput="updateSimulation()">
+        <span id="knee-lever-value">0.15</span>
+      </div>
+
+      <div class="slider-container joint-slider" data-joint="elbow">
+        <label>Elbow Angle (deg):</label>
+        <input type="range" min="0" max="180" value="180" id="elbow-angle" oninput="updateSimulation()">
+        <span id="elbow-angle-value">180</span>
+      </div>
+      <div class="slider-container joint-slider" data-joint="elbow">
+        <label>Elbow Lever Arm (m):</label>
+        <input type="range" min="0.05" max="0.3" step="0.01" value="0.1" id="elbow-lever" oninput="updateSimulation()">
+        <span id="elbow-lever-value">0.1</span>
+      </div>
+
+      <button onclick="exportData()">Export Data</button>
+      <button onclick="resetSimulation()">Reset</button>
+    </div>
+
+    <div>
+      <canvas id="simulation-canvas"></canvas>
+      <div class="results">
+        <h2>Results</h2>
+        <p><strong>Predicted Max Weight:</strong> <span id="max-weight">0</span> kg</p>
+        <p><strong>Joint Torques:</strong></p>
+        <ul id="torque-list">
+          <li data-joint="hip">Hip: <span id="hip-torque">0</span> Nm</li>
+          <li data-joint="knee">Knee: <span id="knee-torque">0</span> Nm</li>
+          <li data-joint="elbow">Elbow: <span id="elbow-torque">0</span> Nm</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('simulation-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 500; canvas.height = 400;
+
+    const lifts = {
+      squat: { joints: ['hip', 'knee'], momentArms: { hip: 0.2, knee: 0.15 } },
+      bench: { joints: ['elbow'], momentArms: { elbow: 0.1 } },
+      deadlift: { joints: ['hip', 'knee'], momentArms: { hip: 0.25, knee: 0.2 } }
+    };
+
+    let currentLift = 'squat';
+    document.getElementById('squat-btn').classList.add('selected');
+
+    const activationMultipliers = { beginner: 0.8, intermediate: 1.0, elite: 1.2 };
+    const baseMuscleForce = 1000;
+    const segmentLengths = { torso: 100, thigh: 80, shin: 80, upperArm: 60, forearm: 60 };
+
+    function selectLift(lift) {
+      currentLift = lift;
+      ['squat', 'bench', 'deadlift'].forEach(l => document.getElementById(l + '-btn').classList.remove('selected'));
+      document.getElementById(lift + '-btn').classList.add('selected');
+      toggleSliders();
+      updateSimulation();
+    }
+
+    function toggleSliders() {
+      document.querySelectorAll('.joint-slider').forEach(div => {
+        const joint = div.dataset.joint;
+        div.classList.toggle('hidden', !lifts[currentLift].joints.includes(joint));
+      });
+      document.querySelectorAll('#torque-list li').forEach(li => {
+        const j = li.dataset.joint;
+        li.style.display = lifts[currentLift].joints.includes(j) ? 'list-item' : 'none';
+      });
+    }
+
+    function updateSliderValues() {
+      ['hip', 'knee', 'elbow'].forEach(j => {
+        document.getElementById(j + '-angle-value').textContent = document.getElementById(j + '-angle').value;
+        document.getElementById(j + '-lever-value').textContent = document.getElementById(j + '-lever').value;
+      });
+    }
+
+    function calculateTorquesAndMaxWeight() {
+      const lvl = document.getElementById('level').value;
+      const m = activationMultipliers[lvl];
+      const torques = {}, maxW = {};
+
+      lifts[currentLift].joints.forEach(j => {
+        const lever = parseFloat(document.getElementById(j + '-lever').value);
+        let angle;
+
+        if (j === 'knee' && (currentLift === 'squat' || currentLift === 'deadlift')) {
+          const kneeAngle = parseFloat(document.getElementById('knee-angle').value);
+          const hipAngle = parseFloat(document.getElementById('hip-angle').value);
+          angle = (kneeAngle - hipAngle) * Math.PI / 180;
+        } else {
+          angle = parseFloat(document.getElementById(j + '-angle').value) * Math.PI / 180;
+        }
+
+        const T = baseMuscleForce * m * lever * Math.sin(angle);
+        torques[j] = T;
+        maxW[j] = T / lifts[currentLift].momentArms[j];
+      });
+
+      const maxWeight = Math.min(...Object.values(maxW));
+      return { torques, maxWeight };
+    }
+
+    function drawStickFigure() {
+      const hipDeg = parseFloat(document.getElementById('hip-angle').value);
+      const kneeDeg = parseFloat(document.getElementById('knee-angle').value);
+      const elbowDeg = parseFloat(document.getElementById('elbow-angle').value);
+      const hipA = hipDeg * Math.PI / 180;
+      const kneeA = (kneeDeg * Math.PI / 180) - hipA;
+      const elbowA = (180 - elbowDeg) * Math.PI / 180;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(250, 300);
+      ctx.lineWidth = 6;
+
+      if (currentLift === 'deadlift') {
+        ctx.strokeStyle = '#1f77b4';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, segmentLengths.thigh);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ff7f0e';
+        ctx.beginPath();
+        ctx.moveTo(0, segmentLengths.thigh);
+        ctx.lineTo(0, segmentLengths.thigh + segmentLengths.shin);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#333';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        const shX = segmentLengths.torso * Math.cos(Math.PI / 2 + hipA);
+        const shY = segmentLengths.torso * Math.sin(Math.PI / 2 + hipA);
+        ctx.lineTo(shX, shY);
+        ctx.stroke();
+
+        const shoulderX = shX;
+        const shoulderY = shY;
+        const armLength = segmentLengths.upperArm + segmentLengths.forearm;
+
+        ctx.strokeStyle = '#2ca02c';
+        ctx.beginPath();
+        ctx.moveTo(shoulderX, shoulderY);
+        ctx.lineTo(shoulderX, shoulderY + armLength);
+        ctx.stroke();
+
+        const barY = shoulderY + armLength;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(shoulderX - 80, barY);
+        ctx.lineTo(shoulderX + 80, barY);
+        ctx.stroke();
+
+      } else {
+        ctx.strokeStyle = '#333';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -segmentLengths.torso);
+        ctx.stroke();
+
+        if (lifts[currentLift].joints.includes('hip')) {
+          ctx.strokeStyle = '#1f77b4';
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          const kneeX = segmentLengths.thigh * Math.cos(hipA);
+          const kneeY = segmentLengths.thigh * Math.sin(hipA);
+          ctx.lineTo(kneeX, kneeY);
+          ctx.stroke();
+
+          const shinA = (kneeDeg - hipDeg) * Math.PI / 180;
+          ctx.strokeStyle = '#ff7f0e';
+          ctx.beginPath();
+          ctx.moveTo(kneeX, kneeY);
+          const ankX = kneeX + segmentLengths.shin * Math.cos(shinA);
+          const ankY = kneeY + segmentLengths.shin * Math.sin(shinA);
+          ctx.lineTo(ankX, ankY);
+          ctx.stroke();
+        }
+
+        if (lifts[currentLift].joints.includes('elbow')) {
+          ctx.strokeStyle = '#2ca02c';
+          ctx.beginPath();
+          ctx.moveTo(0, -segmentLengths.torso);
+          ctx.lineTo(0, -segmentLengths.torso + segmentLengths.upperArm);
+          ctx.stroke();
+
+          ctx.strokeStyle = '#d62728';
+          ctx.beginPath();
+          const ex = 0;
+          const ey = -segmentLengths.torso + segmentLengths.upperArm;
+          ctx.moveTo(ex, ey);
+          const fx = ex + segmentLengths.forearm * Math.sin(elbowA);
+          const fy = ey + segmentLengths.forearm * Math.cos(elbowA);
+          ctx.lineTo(fx, fy);
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore();
+    }
+
+    function updateResults(t, w) {
+      document.getElementById('max-weight').textContent = w.toFixed(1);
+      Object.entries(t).forEach(([j, val]) => {
+        document.getElementById(j + '-torque').textContent = val.toFixed(1);
+      });
+    }
+
+    function updateSimulation() {
+      updateSliderValues();
+      const { torques, maxWeight } = calculateTorquesAndMaxWeight();
+      drawStickFigure();
+      updateResults(torques, maxWeight);
+    }
+
+    function exportData() {
+      alert("Export feature not implemented.");
+    }
+
+    function resetSimulation() {
+      ['hip-angle', 'knee-angle', 'elbow-angle'].forEach(id => {
+        document.getElementById(id).value = (id === 'hip-angle' ? 0 : 180);
+      });
+      ['hip-lever', 'knee-lever', 'elbow-lever'].forEach(id => {
+        document.getElementById(id).value = (id === 'hip-lever' ? 0.2 : (id === 'knee-lever' ? 0.15 : 0.1));
+      });
+      document.getElementById('level').value = 'intermediate';
+      selectLift('squat');
+    }
+
+    toggleSliders();
+    updateSimulation();
+  </script>
+</body>
+</html>
